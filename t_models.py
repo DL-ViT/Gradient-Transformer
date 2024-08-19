@@ -1,5 +1,5 @@
 import argparse
-from ISTD.net import Net
+from net import Net
 import os
 import time
 from thop import profile

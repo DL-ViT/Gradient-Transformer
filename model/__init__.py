@@ -12,4 +12,5 @@ from model.GTransformer.segmentation import GTransformer
 from model.UNet.UNet import UNet
 from model.GTransformerv2.segmentation import GTransformerv2
 from model.GTransformerv4.segmentation import GTransformerv4
+from model.GTransformerv7.segmentation import GTransformerv7
 from model.SCTrans.segmentation import SCTrans

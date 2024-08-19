@@ -12,10 +12,10 @@ def get_activation(activation_type):
     else:
         return nn.ReLU()
 class CBN(nn.Module):
-    def __init__(self, in_channels, out_channels, activation='ReLU',kernel_size=3):
+    def __init__(self, in_channels, out_channels, activation='LeakyReLU'):
         super(CBN, self).__init__()
         self.conv = nn.Conv2d(in_channels, out_channels,
-                              kernel_size=kernel_size, padding='same')
+                              kernel_size=3, padding=1)
         self.norm = nn.BatchNorm2d(out_channels)
         self.activation = get_activation(activation)
 
@@ -23,7 +23,7 @@ class CBN(nn.Module):
         out = self.conv(x)
         out = self.norm(out)
         return self.activation(out)
-def _make_nConv(in_channels, out_channels, nb_Conv, activation='ReLU'):
+def _make_nConv(in_channels, out_channels, nb_Conv, activation='LeakyReLU'):
     layers = []
     layers.append(CBN(in_channels, out_channels, activation))
 
@@ -31,15 +31,17 @@ def _make_nConv(in_channels, out_channels, nb_Conv, activation='ReLU'):
         layers.append(CBN(out_channels, out_channels, activation))
     return nn.Sequential(*layers)
 class UpBlock_attention(nn.Module):
-    def __init__(self, in_channels, out_channels, nb_Conv, activation='ReLU'):
+    def __init__(self, in_channels, out_channels, nb_Conv, activation='LeakyReLU'):
         super().__init__()
         self.up = nn.Upsample(scale_factor=2,mode='bilinear')
         self.nConvs = _make_nConv(in_channels, out_channels, nb_Conv, activation)
         # self.cattn = ChannelAttention(input_channels=in_channels//2,internal_neurons=in_channels//16)
         self.cattn = eca_layer_fuse(channel=in_channels//2)
+        # self.sattn = EMA_fuse(channels=in_channels//2)
     def forward(self,d,c,xin):
-        d = self.cattn(low=xin,high=d)*d
+        d = self.cattn(low=xin,high=d)
         d = self.up(d)
+        # x = self.sattn(low=d,high=xin)
         x = torch.cat([c, d], dim=1)  # dim 1 is the channel dimension
         x = self.nConvs(x)
         return x
@@ -88,20 +90,18 @@ class GTransformerv4(nn.Module):
         self.encoder1 = self._make_layer(block, in_channels, in_channels * 2, 1)  
         self.encoder2 = self._make_layer(block, in_channels * 2, in_channels * 4, 1) 
         self.encoder3 = self._make_layer(block, in_channels * 4, in_channels * 8, 1)  
-        self.encoder4 = self._make_layer(block, in_channels * 8,  in_channels * 8, 1)  
-        self.encoder5 = self._make_layer(block, in_channels*8 , in_channels *4  ,1)
-        self.encoder6 = self._make_layer(block, in_channels*4 , in_channels *4  ,1)
+        self.encoder4 = self._make_layer(block, in_channels * 8, in_channels * 8, 1)  
         self.contras1 = ExpansionContrastModule(in_channels=in_channels*1,out_channels=in_channels*1,width=img_size//1,height=img_size//1,shifts=[1,3])
         self.contras2 = ExpansionContrastModule(in_channels=in_channels*2,out_channels=in_channels*2,width=img_size//2,height=img_size//2,shifts=[1,3])
         self.contras3 = ExpansionContrastModule(in_channels=in_channels*4,out_channels=in_channels*4,width=img_size//4,height=img_size//4,shifts=[1,3])
         self.contras4 = ExpansionContrastModule(in_channels=in_channels*8,out_channels=in_channels*8,width=img_size//8,height=img_size//8,shifts=[1,3])
-        self.decoder6 = nn.Sequential(nn.ConvTranspose2d(kernel_size=2,stride=2,in_channels=in_channels*4,out_channels=in_channels*4),CBN(in_channels*4,in_channels*4,kernel_size=1))
-        self.decoder5 = nn.Sequential(nn.ConvTranspose2d(kernel_size=2,stride=2,in_channels=in_channels*4,out_channels=in_channels*4),CBN(in_channels*4,in_channels*8,kernel_size=1))
         self.decoder4 = UpBlock_attention(in_channels * 16, in_channels * 4, nb_Conv=2)
         self.decoder3 = UpBlock_attention(in_channels * 8, in_channels * 2, nb_Conv=2)
         self.decoder2 = UpBlock_attention(in_channels * 4, in_channels, nb_Conv=2)
         self.decoder1 = UpBlock_attention(in_channels * 2, in_channels, nb_Conv=2)
         self.outc = nn.Conv2d(in_channels, n_classes, kernel_size=(1, 1), stride=(1, 1))
+
+
     def _make_layer(self, block, input_channels, output_channels, num_blocks=1):
         layers = []
         layers.append(block(input_channels, output_channels))
@@ -111,21 +111,17 @@ class GTransformerv4(nn.Module):
 
     def forward(self, x):
         #encoder
-        x1 = self.inc(x) 
-        x2 = self.encoder1(self.pool(x1)) 
-        x3 = self.encoder2(self.pool(x2))  
-        x4 = self.encoder3(self.pool(x3))  
-        x5 = self.encoder4(self.pool(x4))  
-        x6 = self.encoder5(self.pool(x5))
-        d7 = self.encoder6(self.pool(x6))
+        x1 = self.inc(x)  # 64 224 224
+        x2 = self.encoder1(self.pool(x1))  # 128 112 112
+        x3 = self.encoder2(self.pool(x2))  # 256 56  56
+        x4 = self.encoder3(self.pool(x3))  # 512 28  28
+        d5 = self.encoder4(self.pool(x4))  # 512 14  14
         # Transfor_layer
         c1 = self.contras1(x1)
         c2 = self.contras2(x2)
         c3 = self.contras3(x3)
         c4 = self.contras4(x4)
         # decoder
-        d6 = self.decoder6(d7)+x6
-        d5 = self.decoder5(d6)+x5
         d4 = self.decoder4(d5, c4, x4)
         d3 = self.decoder3(d4, c3, x3)
         d2 = self.decoder2(d3, c2, x2)
