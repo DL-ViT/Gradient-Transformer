@@ -36,15 +36,12 @@ class UpBlock_attention(nn.Module):
         super().__init__()
         self.up = nn.Upsample(scale_factor=2,mode='bilinear')
         self.nConvs = _make_nConv(in_channels, out_channels, nb_Conv, activation)
-        # self.cattn = ChannelAttention(input_channels=in_channels//2,internal_neurons=in_channels//16)
-        # self.cattn = eca_layer_fuse(channel=in_channels//2)
-        # self.sattn = nn.Sequential(nn.Conv2d(in_channels//2,in_channels//2,kernel_size=1),
-        #                            nn.Sigmoid())
+        self.sattn = nn.Sequential(nn.Conv2d(in_channels//2,in_channels//2,kernel_size=1),
+                                   nn.Sigmoid())
     def forward(self,d,c,xin):
-        # d = self.cattn(low=xin,high=d)*d
         d = self.up(d)
-        # d = self.sattn(xin)*d
-        x = torch.cat([c, d], dim=1)  # dim 1 is the channel dimension
+        d = self.sattn(xin)*d
+        x = torch.cat([c, d], dim=1)
         x = self.nConvs(x)
         return x
 class Res_block(nn.Module):
