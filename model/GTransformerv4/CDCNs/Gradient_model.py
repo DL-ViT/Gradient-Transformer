@@ -4,6 +4,7 @@ import numpy as np
 import torch.nn.functional as F
 from torch import nn
 import math
+from .contrast_and_atrous import AttnContrastLayer
 class ExpansionContrastModule(nn.Module):
     def __init__(self,in_channels,out_channels,width,height,shifts):
         super().__init__()
@@ -19,7 +20,7 @@ class ExpansionContrastModule(nn.Module):
         w1,w2,w3,w4,w5,w6,w7,w8=np.array_split(delta,8)
         self.in_channels = max(in_channels,1)
         self.shifts =shifts
-        
+        self.num_heads = len(shifts)
         self.scale=torch.nn.Parameter(torch.zeros(len(self.shifts)))
     
         #After Extraction, we analyze the outcome of the extraction.
@@ -28,10 +29,10 @@ class ExpansionContrastModule(nn.Module):
         self.height = height
         self.area = width* height
         self.psi = nn.InstanceNorm2d(len(self.shifts))
-        self.position_embeddings = nn.Parameter(torch.zeros(1,1,self.area))
-        self.layernorm1 = nn.LayerNorm(self.area)
-        self.layernorm2 = nn.LayerNorm(self.area)
-        self.layernorm3 = nn.LayerNorm(self.area)
+        # self.position_embeddings = nn.Parameter(torch.zeros(1,1,self.area))
+        # self.layernorm1 = nn.LayerNorm(self.area)
+        # self.layernorm2 = nn.LayerNorm(self.area)
+        # self.layernorm3 = nn.LayerNorm(self.area)
         self.softmax_layer = nn.Softmax(dim=-1)
         self.query_convs=nn.ModuleList()
         self.key_convs=nn.ModuleList()
@@ -66,7 +67,7 @@ class ExpansionContrastModule(nn.Module):
         self.out_conv = nn.Sequential(nn.Conv2d(in_channels=self.in_channels,out_channels=self.in_channels,kernel_size=1,stride=1,bias=False),
                                       nn.BatchNorm2d(self.in_channels),
                                       nn.ReLU())
-    def Extract_layer(self,cen,i=0):
+    def Extract_layer(self,cen,b,w,h):
         surrounds_keys = []
         surrounds_querys = []
         surrounds_values = []
@@ -83,16 +84,16 @@ class ExpansionContrastModule(nn.Module):
             surround7 = torch.nn.functional.conv2d(weight=self.kernel7, stride=1, padding="same", input=cen,groups=self.in_channels,dilation=self.shifts[i])
             surround8 = torch.nn.functional.conv2d(weight=self.kernel8, stride=1, padding="same", input=cen,groups=self.in_channels,dilation=self.shifts[i])
             surrounds = torch.cat([surround1,surround2,surround3,surround4,surround5,surround6,surround7,surround8],1)
-            surrounds_keys.append(self.key_convs[i](surrounds).flatten(2))
-            surrounds_querys.append(self.query_convs[i](cen).flatten(2))
-            surrounds_values.append(self.value_convs[i](surrounds).flatten(2))
-        surrounds_keys = torch.stack(surrounds_keys,dim=1)
-        surrounds_querys = torch.stack(surrounds_querys,dim=1)
-        surrounds_values = torch.stack(surrounds_values,dim=1)
+            surrounds_keys.append(self.key_convs[i](surrounds))
+            surrounds_querys.append(self.query_convs[i](cen))
+            surrounds_values.append(self.value_convs[i](surrounds))
+        surrounds_keys = torch.stack(surrounds_keys,dim=2).view(b,self.num_heads,-1,w*h)
+        surrounds_querys = torch.stack(surrounds_querys,dim=2).view(b,self.num_heads,-1,w*h)
+        surrounds_values = torch.stack(surrounds_values,dim=2).view(b,self.num_heads,-1,w*h)
         return surrounds_keys,surrounds_querys,surrounds_values
     def forward(self,cen):
         b,_,w,h= cen.shape
-        deltas_keys,deltas_querys,deltas_values = self.Extract_layer(cen,i=0)
+        deltas_keys,deltas_querys,deltas_values = self.Extract_layer(cen,b,w,h)
         deltas_keys = torch.nn.functional.normalize(deltas_keys,dim=-1).transpose(-2,-1)
         deltas_querys = torch.nn.functional.normalize(deltas_querys,dim=-1)
         weight_score = self.softmax_layer(self.psi(torch.matmul(deltas_querys,deltas_keys)/math.sqrt(self.area)))

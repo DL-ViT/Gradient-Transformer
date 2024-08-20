@@ -38,9 +38,12 @@ class UpBlock_attention(nn.Module):
         self.nConvs = _make_nConv(in_channels, out_channels, nb_Conv, activation)
         # self.cattn = ChannelAttention(input_channels=in_channels//2,internal_neurons=in_channels//16)
         # self.cattn = eca_layer_fuse(channel=in_channels//2)
+        # self.sattn = nn.Sequential(nn.Conv2d(in_channels//2,in_channels//2,kernel_size=1),
+        #                            nn.Sigmoid())
     def forward(self,d,c,xin):
         # d = self.cattn(low=xin,high=d)*d
         d = self.up(d)
+        # d = self.sattn(xin)*d
         x = torch.cat([c, d], dim=1)  # dim 1 is the channel dimension
         x = self.nConvs(x)
         return x
@@ -127,7 +130,7 @@ class GTransformerv4(nn.Module):
         c4 = self.contras4(x4)
         c5 = self.contras5(x5)
         # decoder
-        d5 = self.decoder5(d6, c5, c5)
+        d5 = self.decoder5(d6, c5, x5)
         d4 = self.decoder4(d5, c4, x4)
         d3 = self.decoder3(d4, c3, x3)
         d2 = self.decoder2(d3, c2, x2)
