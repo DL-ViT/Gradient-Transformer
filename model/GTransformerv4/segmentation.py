@@ -5,6 +5,7 @@ import torch.nn.functional as F
 from .Gradient_attention.contrast_and_atrous import AttnContrastLayer
 from .CDCNs.Gradient_model import ExpansionContrastModule
 from .AttentionModule import *
+from .AttentionModule import _NonLocalBlockND
 def get_activation(activation_type):
     activation_type = activation_type.lower()
     if hasattr(nn, activation_type):
@@ -36,9 +37,9 @@ class UpBlock_attention(nn.Module):
         self.up = nn.Upsample(scale_factor=2,mode='bilinear')
         self.nConvs = _make_nConv(in_channels, out_channels, nb_Conv, activation)
         # self.cattn = ChannelAttention(input_channels=in_channels//2,internal_neurons=in_channels//16)
-        self.cattn = eca_layer_fuse(channel=in_channels//2)
+        # self.cattn = eca_layer_fuse(channel=in_channels//2)
     def forward(self,d,c,xin):
-        d = self.cattn(low=xin,high=d)*d
+        # d = self.cattn(low=xin,high=d)*d
         d = self.up(d)
         x = torch.cat([c, d], dim=1)  # dim 1 is the channel dimension
         x = self.nConvs(x)
@@ -89,14 +90,16 @@ class GTransformerv4(nn.Module):
         self.encoder2 = self._make_layer(block, in_channels * 2, in_channels * 4, 1) 
         self.encoder3 = self._make_layer(block, in_channels * 4, in_channels * 8, 1)  
         self.encoder4 = self._make_layer(block, in_channels * 8,  in_channels * 8, 1)  
-        self.encoder5 = self._make_layer(block, in_channels*8 , in_channels *4  ,1)
-        self.encoder6 = self._make_layer(block, in_channels*4 , in_channels *4  ,1)
+        self.encoder5 = self._make_layer(block, in_channels*8 , in_channels *8  ,1)
+        # self.encoder6 = self._make_layer(block, in_channels*4 , in_channels *4  ,1)
         self.contras1 = ExpansionContrastModule(in_channels=in_channels*1,out_channels=in_channels*1,width=img_size//1,height=img_size//1,shifts=[1,3])
         self.contras2 = ExpansionContrastModule(in_channels=in_channels*2,out_channels=in_channels*2,width=img_size//2,height=img_size//2,shifts=[1,3])
         self.contras3 = ExpansionContrastModule(in_channels=in_channels*4,out_channels=in_channels*4,width=img_size//4,height=img_size//4,shifts=[1,3])
         self.contras4 = ExpansionContrastModule(in_channels=in_channels*8,out_channels=in_channels*8,width=img_size//8,height=img_size//8,shifts=[1,3])
-        self.decoder6 = nn.Sequential(nn.ConvTranspose2d(kernel_size=2,stride=2,in_channels=in_channels*4,out_channels=in_channels*4),CBN(in_channels*4,in_channels*4,kernel_size=1))
-        self.decoder5 = nn.Sequential(nn.ConvTranspose2d(kernel_size=2,stride=2,in_channels=in_channels*4,out_channels=in_channels*4),CBN(in_channels*4,in_channels*8,kernel_size=1))
+        self.contras5 = _NonLocalBlockND(in_channels=in_channels*8,inter_channels=in_channels)
+        
+        # self.decoder6 = nn.Sequential(nn.ConvTranspose2d(in_channels=in_channels*4,out_channels=in_channels*4,kernel_size=2,stride=2),CBN(in_channels*4,in_channels*4,kernel_size=1))
+        self.decoder5 = UpBlock_attention(in_channels * 16, in_channels * 8, nb_Conv=2)
         self.decoder4 = UpBlock_attention(in_channels * 16, in_channels * 4, nb_Conv=2)
         self.decoder3 = UpBlock_attention(in_channels * 8, in_channels * 2, nb_Conv=2)
         self.decoder2 = UpBlock_attention(in_channels * 4, in_channels, nb_Conv=2)
@@ -116,16 +119,15 @@ class GTransformerv4(nn.Module):
         x3 = self.encoder2(self.pool(x2))  
         x4 = self.encoder3(self.pool(x3))  
         x5 = self.encoder4(self.pool(x4))  
-        x6 = self.encoder5(self.pool(x5))
-        d7 = self.encoder6(self.pool(x6))
+        d6 = self.encoder5(self.pool(x5))
         # Transfor_layer
         c1 = self.contras1(x1)
         c2 = self.contras2(x2)
         c3 = self.contras3(x3)
         c4 = self.contras4(x4)
+        c5 = self.contras5(x5)
         # decoder
-        d6 = self.decoder6(d7)+x6
-        d5 = self.decoder5(d6)+x5
+        d5 = self.decoder5(d6, c5, c5)
         d4 = self.decoder4(d5, c4, x4)
         d3 = self.decoder3(d4, c3, x3)
         d2 = self.decoder2(d3, c2, x2)

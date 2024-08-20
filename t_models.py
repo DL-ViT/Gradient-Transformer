@@ -6,7 +6,7 @@ from thop import profile
 import torch
 
 os.environ['KMP_DUPLICATE_LIB_OK'] = 'TRUE'
-model_name = 'ACM'
+model_name = 'GTransformerv7'
 input_img = torch.rand(1,1,256,256).cuda()
 net = Net(model_name, mode='test').cuda()
 flops, params = profile(net, inputs=(input_img, ))
